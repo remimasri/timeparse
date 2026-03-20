@@ -84,6 +84,37 @@ function subDays(date, days) {
   return d;
 }
 
+function emptyParsed() {
+  return {
+    resolvedDate: null,
+    resolvedDateTime: null,
+    actualWeekday: null,
+    userWeekday: null,
+    spoken: null,
+    originalText: null,
+    confidence: null,
+    type: null,
+    grain: null,
+  };
+}
+
+function buildResponse(overrides = {}) {
+  return {
+    success: false,
+    needsClarification: false,
+    reason: null,
+    originalUtterance: null,
+    message: null,
+    clarificationPrompt: null,
+    parsed: emptyParsed(),
+    ...overrides,
+    parsed: {
+      ...emptyParsed(),
+      ...(overrides.parsed || {}),
+    },
+  };
+}
+
 function buildParsedResult({ utterance, resolved, timezone, type = 'relative', grain = 'day' }) {
   return {
     resolvedDate: dateOnly(resolved, timezone),
@@ -181,7 +212,7 @@ function preprocessRelativeDate(utterance, timezone, referenceNow) {
     };
   }
 
-  return { handled: false };
+  return { handled: false, parsed: emptyParsed() };
 }
 
 function nextWeekdayDate(anchorDate, targetWeekday, timezone) {
@@ -202,10 +233,13 @@ function nextWeekdayDate(anchorDate, targetWeekday, timezone) {
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'POST') {
-    return res.status(405).json({
-      success: false,
-      message: 'Method not allowed',
-    });
+    return res.status(405).json(
+      buildResponse({
+        success: false,
+        reason: 'method_not_allowed',
+        message: 'Method not allowed',
+      })
+    );
   }
 
   const {
@@ -215,25 +249,31 @@ module.exports = async function handler(req, res) {
   } = req.body || {};
 
   if (!utterance || typeof utterance !== 'string') {
-    return res.status(400).json({
-      success: false,
-      needsClarification: true,
-      reason: 'missing_utterance',
-      message: 'Missing required field: utterance',
-    });
+    return res.status(400).json(
+      buildResponse({
+        success: false,
+        needsClarification: true,
+        reason: 'missing_utterance',
+        originalUtterance: utterance ?? null,
+        message: 'Missing required field: utterance',
+      })
+    );
   }
 
   try {
     const preprocessed = preprocessRelativeDate(utterance, timezone, referenceNow);
 
     if (preprocessed.handled) {
-      return res.status(200).json({
-        success: true,
-        needsClarification: false,
-        reason: null,
-        originalUtterance: utterance,
-        parsed: preprocessed.parsed,
-      });
+      return res.status(200).json(
+        buildResponse({
+          success: true,
+          needsClarification: false,
+          reason: null,
+          originalUtterance: utterance,
+          message: 'Date resolved successfully',
+          parsed: preprocessed.parsed,
+        })
+      );
     }
 
     const timeAI = new TimeAI({
@@ -246,13 +286,15 @@ module.exports = async function handler(req, res) {
     });
 
     if (!parsed || !parsed.resolvedDate) {
-      return res.status(200).json({
-        success: false,
-        needsClarification: true,
-        reason: 'no_date_found',
-        originalUtterance: utterance,
-        message: 'Could not resolve a date from the utterance.',
-      });
+      return res.status(200).json(
+        buildResponse({
+          success: false,
+          needsClarification: true,
+          reason: 'no_date_found',
+          originalUtterance: utterance,
+          message: 'Could not resolve a date from the utterance.',
+        })
+      );
     }
 
     const resolved = new Date(parsed.resolvedDate);
@@ -275,31 +317,40 @@ module.exports = async function handler(req, res) {
       const alt = nextWeekdayDate(resolved, userWeekday, timezone);
       const altSpoken = alt ? formatSpoken(alt, timezone) : null;
 
-      return res.status(200).json({
-        success: false,
-        needsClarification: true,
-        reason: 'weekday_mismatch',
-        originalUtterance: utterance,
-        parsed: result,
-        clarificationPrompt: altSpoken
-          ? `I heard ${userWeekday} in your request, but ${result.spoken} is actually a ${actualWeekday}. Did you mean ${altSpoken}, or ${result.spoken}?`
-          : `I heard ${userWeekday} in your request, but ${result.spoken} is actually a ${actualWeekday}. Which one should I use?`,
-      });
+      return res.status(200).json(
+        buildResponse({
+          success: false,
+          needsClarification: true,
+          reason: 'weekday_mismatch',
+          originalUtterance: utterance,
+          message: 'Weekday in utterance does not match resolved date.',
+          clarificationPrompt: altSpoken
+            ? `I heard ${userWeekday} in your request, but ${result.spoken} is actually a ${actualWeekday}. Did you mean ${altSpoken}, or ${result.spoken}?`
+            : `I heard ${userWeekday} in your request, but ${result.spoken} is actually a ${actualWeekday}. Which one should I use?`,
+          parsed: result,
+        })
+      );
     }
 
-    return res.status(200).json({
-      success: true,
-      needsClarification: false,
-      reason: null,
-      originalUtterance: utterance,
-      parsed: result,
-    });
+    return res.status(200).json(
+      buildResponse({
+        success: true,
+        needsClarification: false,
+        reason: null,
+        originalUtterance: utterance,
+        message: 'Date resolved successfully',
+        parsed: result,
+      })
+    );
   } catch (error) {
-    return res.status(500).json({
-      success: false,
-      needsClarification: true,
-      reason: 'parse_error',
-      message: error.message || 'Unexpected error',
-    });
+    return res.status(500).json(
+      buildResponse({
+        success: false,
+        needsClarification: true,
+        reason: 'parse_error',
+        originalUtterance: utterance,
+        message: error.message || 'Unexpected error',
+      })
+    );
   }
 };
