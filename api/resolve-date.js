@@ -4,6 +4,14 @@ function toTitleCase(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s;
 }
 
+function normalizeText(text) {
+  return (text || '')
+    .toLowerCase()
+    .replace(/[.,!?;:]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function extractWeekday(text) {
   if (!text || typeof text !== 'string') return null;
   const match = text.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
@@ -54,10 +62,7 @@ function isoWithOffset(date, timezone) {
   }).formatToParts(date);
 
   const map = Object.fromEntries(parts.map((p) => [p.type, p.value]));
-
-  const local = new Date(
-    `${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}Z`
-  );
+  const local = new Date(`${map.year}-${map.month}-${map.day}T${map.hour}:${map.minute}:${map.second}Z`);
   const offsetMinutes = Math.round((local.getTime() - date.getTime()) / 60000);
   const sign = offsetMinutes >= 0 ? '+' : '-';
   const abs = Math.abs(offsetMinutes);
@@ -79,18 +84,34 @@ function subDays(date, days) {
   return d;
 }
 
-function matchesWholePhrase(text, phrases) {
-  const normalized = text.trim().toLowerCase().replace(/\s+/g, ' ');
-  return phrases.some((p) => normalized === p);
+function buildParsedResult({ utterance, resolved, timezone, type = 'relative', grain = 'day' }) {
+  return {
+    resolvedDate: dateOnly(resolved, timezone),
+    resolvedDateTime: isoWithOffset(resolved, timezone),
+    actualWeekday: weekdayOf(resolved, timezone),
+    userWeekday: null,
+    spoken: formatSpoken(resolved, timezone),
+    originalText: utterance,
+    confidence: 1,
+    type,
+    grain,
+  };
+}
+
+function containsAnyPhrase(text, phrases) {
+  return phrases.some((phrase) => {
+    const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`\\b${escaped}\\b`, 'i');
+    return re.test(text);
+  });
 }
 
 function preprocessRelativeDate(utterance, timezone, referenceNow) {
-  const text = utterance.trim().toLowerCase().replace(/\s+/g, ' ');
+  const text = normalizeText(utterance);
   const ref = new Date(referenceNow);
 
-  // day after tomorrow
   if (
-    matchesWholePhrase(text, [
+    containsAnyPhrase(text, [
       'after tomorrow',
       'day after tomorrow',
       'after tmw',
@@ -100,23 +121,16 @@ function preprocessRelativeDate(utterance, timezone, referenceNow) {
     const resolved = addDays(ref, 2);
     return {
       handled: true,
-      parsed: {
-        resolvedDate: dateOnly(resolved, timezone),
-        resolvedDateTime: isoWithOffset(resolved, timezone),
-        actualWeekday: weekdayOf(resolved, timezone),
-        userWeekday: null,
-        spoken: formatSpoken(resolved, timezone),
-        originalText: utterance,
-        confidence: 1,
-        type: 'relative',
-        grain: 'day',
-      },
+      parsed: buildParsedResult({
+        utterance,
+        resolved,
+        timezone,
+      }),
     };
   }
 
-  // day before yesterday
   if (
-    matchesWholePhrase(text, [
+    containsAnyPhrase(text, [
       'before yesterday',
       'day before yesterday',
     ])
@@ -124,72 +138,46 @@ function preprocessRelativeDate(utterance, timezone, referenceNow) {
     const resolved = subDays(ref, 2);
     return {
       handled: true,
-      parsed: {
-        resolvedDate: dateOnly(resolved, timezone),
-        resolvedDateTime: isoWithOffset(resolved, timezone),
-        actualWeekday: weekdayOf(resolved, timezone),
-        userWeekday: null,
-        spoken: formatSpoken(resolved, timezone),
-        originalText: utterance,
-        confidence: 1,
-        type: 'relative',
-        grain: 'day',
-      },
+      parsed: buildParsedResult({
+        utterance,
+        resolved,
+        timezone,
+      }),
     };
   }
 
-  // simple exact phrases
-  if (matchesWholePhrase(text, ['today'])) {
-    const resolved = ref;
+  if (/^\s*today\s*$/i.test(utterance)) {
     return {
       handled: true,
-      parsed: {
-        resolvedDate: dateOnly(resolved, timezone),
-        resolvedDateTime: isoWithOffset(resolved, timezone),
-        actualWeekday: weekdayOf(resolved, timezone),
-        userWeekday: null,
-        spoken: formatSpoken(resolved, timezone),
-        originalText: utterance,
-        confidence: 1,
-        type: 'relative',
-        grain: 'day',
-      },
+      parsed: buildParsedResult({
+        utterance,
+        resolved: ref,
+        timezone,
+      }),
     };
   }
 
-  if (matchesWholePhrase(text, ['tomorrow', 'tmw'])) {
+  if (/^\s*(tomorrow|tmw)\s*$/i.test(utterance)) {
     const resolved = addDays(ref, 1);
     return {
       handled: true,
-      parsed: {
-        resolvedDate: dateOnly(resolved, timezone),
-        resolvedDateTime: isoWithOffset(resolved, timezone),
-        actualWeekday: weekdayOf(resolved, timezone),
-        userWeekday: null,
-        spoken: formatSpoken(resolved, timezone),
-        originalText: utterance,
-        confidence: 1,
-        type: 'relative',
-        grain: 'day',
-      },
+      parsed: buildParsedResult({
+        utterance,
+        resolved,
+        timezone,
+      }),
     };
   }
 
-  if (matchesWholePhrase(text, ['yesterday'])) {
+  if (/^\s*yesterday\s*$/i.test(utterance)) {
     const resolved = subDays(ref, 1);
     return {
       handled: true,
-      parsed: {
-        resolvedDate: dateOnly(resolved, timezone),
-        resolvedDateTime: isoWithOffset(resolved, timezone),
-        actualWeekday: weekdayOf(resolved, timezone),
-        userWeekday: null,
-        spoken: formatSpoken(resolved, timezone),
-        originalText: utterance,
-        confidence: 1,
-        type: 'relative',
-        grain: 'day',
-      },
+      parsed: buildParsedResult({
+        utterance,
+        resolved,
+        timezone,
+      }),
     };
   }
 
@@ -206,8 +194,7 @@ function nextWeekdayDate(anchorDate, targetWeekday, timezone) {
   for (let i = 1; i <= 7; i++) {
     const d = new Date(base);
     d.setDate(d.getDate() + i);
-    const wd = weekdayOf(d, timezone);
-    if (wd === targetWeekday) return d;
+    if (weekdayOf(d, timezone) === targetWeekday) return d;
   }
 
   return null;
@@ -237,7 +224,6 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    // 1) preprocess known tricky phrases
     const preprocessed = preprocessRelativeDate(utterance, timezone, referenceNow);
 
     if (preprocessed.handled) {
@@ -250,7 +236,6 @@ module.exports = async function handler(req, res) {
       });
     }
 
-    // 2) fallback to time-ai
     const timeAI = new TimeAI({
       timezone,
       locale: 'en-US',
