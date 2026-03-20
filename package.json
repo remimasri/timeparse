@@ -1,0 +1,7 @@
+{
+  "name": "time-ai-service",
+  "version": "1.0.0",
+  "dependencies": {
+    "@blueprintlabio/time-ai": "^0.1.0"
+  }
+}
